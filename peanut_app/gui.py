@@ -1297,6 +1297,8 @@ class AIUpdateDialog(tk.Toplevel):
                         self.x_train_button.configure(state="normal")
                     if kind == "training_done":
                         self._refresh_model_versions()
+                    if kind == "x_training_done":
+                        self._refresh_model_versions()
         except queue.Empty:
             pass
         if self.winfo_exists():

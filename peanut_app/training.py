@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 import random
 import shutil
@@ -392,6 +393,33 @@ class TrainingPipeline:
         candidate = Path(result.save_dir) / "weights" / "best.pt"
         if not candidate.is_file():
             raise RuntimeError("X 模型訓練完成但找不到 best.pt")
+        metrics: dict[str, float] = {}
+        results_csv = candidate.parent.parent / "results.csv"
+        if results_csv.is_file():
+            with results_csv.open("r", encoding="utf-8-sig", newline="") as handle:
+                rows = list(csv.DictReader(handle))
+            if rows:
+                best_row = max(
+                    rows,
+                    key=lambda row: float(row.get("metrics/mAP50-95(B)", 0) or 0),
+                )
+                for key in (
+                    "metrics/precision(B)",
+                    "metrics/recall(B)",
+                    "metrics/mAP50(B)",
+                    "metrics/mAP50-95(B)",
+                ):
+                    if best_row.get(key):
+                        metrics[key] = float(best_row[key])
+                metrics["best_epoch"] = float(best_row.get("epoch", 0) or 0)
+        candidate_version = f"x_auto_{timestamp}"
+        self.database.register_model_version(
+            version=candidate_version,
+            weight_path=candidate,
+            weight_hash=file_hash(candidate),
+            metrics=metrics,
+            active=False,
+        )
         callback(f"X 模型候選完成：{candidate}")
         return candidate
 
