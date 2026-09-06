@@ -1,0 +1,43 @@
+# Python virtual environment
+.venv/
+venv/
+env/
+**/.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# IDE
+.vscode/
+.idea/
+
+# Temporary files
+*.tmp
+*.bak
+*.log
+
+# YOLO / training generated data
+production_data/
+**/runs/
+**/gopro_videos/
+**/dataset/
+**/dataset_*/
+
+# Model weights
+*.pt
+*.pth
+*.onnx
+
+# Local machine/runtime data
+*.sqlite3
+*.db
+*.mp4
+*.avi
+*.mov
+
+# Generated archives and OS files
+*.zip
+Thumbs.db
+.DS_Store

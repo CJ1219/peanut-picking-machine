@@ -1,0 +1,10 @@
+path: C:/Users/baifa/OneDrive/Desktop/中興AI競賽/dataset
+
+train: images/train
+val: images/val
+test: images/test
+
+names:
+  0: normal
+  1: mold
+  2: small
