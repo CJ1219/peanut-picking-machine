@@ -1060,7 +1060,7 @@ class AIUpdateDialog(tk.Toplevel):
             training_tab,
             text=(
                 f"目前完整原始訓練幀：{sample_count} 張\n"
-                f"x 模型：{config.x_model_path}\n"
+                f"自動標註模型（M）：{config.x_model_path}\n"
                 f"M 訓練起始模型：{config.m_model_path}\n\n"
                 f"原始 dataset：train {base_counts['train']} + val {base_counts['val']} + "
                 f"test {base_counts['test']} = {sum(base_counts.values())} 張\n"
@@ -1086,21 +1086,21 @@ class AIUpdateDialog(tk.Toplevel):
         ttk.Label(train_settings, text="epochs").pack(side="left")
         ttk.Entry(train_settings, textvariable=self.epochs_var, width=8).pack(side="left", padx=8)
         self.train_button = ttk.Button(
-            train_settings, text="開始離線更新", command=self._start_training
+            train_settings, text="訓練M", command=self._start_training
         )
         self.train_button.pack(side="left", padx=10)
-        self.x_train_button = ttk.Button(
-            train_settings, text="訓練X模型", command=self._start_x_training
+        self.m_train_button = ttk.Button(
+            train_settings, text="訓練X", command=self._start_m_training
         )
-        self.x_train_button.pack(side="left", padx=4)
+        self.m_train_button.pack(side="left", padx=4)
         ttk.Button(
             train_settings,
-            text="人工確認區",
+            text="人工確認",
             command=self._open_review_queue,
         ).pack(side="left", padx=4)
         if detection_running:
             self.train_button.configure(state="disabled")
-            self.x_train_button.configure(state="disabled")
+            self.m_train_button.configure(state="disabled")
             ttk.Label(
                 training_tab,
                 text="辨識運行中，為避免 GPU 資源衝突，模型更新已停用。",
@@ -1140,15 +1140,12 @@ class AIUpdateDialog(tk.Toplevel):
         self._set_analysis_report(report, complete=True)
 
     def _set_analysis_report(self, report: str, complete: bool) -> None:
-        lines = [line.strip() for line in report.splitlines() if line.strip()]
-        bullets = [line for line in lines if line.startswith("-")]
-        brief = ["分析狀態：已完成" if complete else "分析狀態：可能未完成", "", *bullets[:5]]
-        if not bullets:
-            brief.append(report[:500])
+        summary, detail = AnalyticsService.report_sections(report)
+        brief = ["分析狀態：已完成" if complete else "分析狀態：可能未完成", "", summary]
         self.analysis_brief_text.delete("1.0", "end")
         self.analysis_brief_text.insert("1.0", "\n".join(brief))
         self.analysis_detail_text.delete("1.0", "end")
-        self.analysis_detail_text.insert("1.0", report)
+        self.analysis_detail_text.insert("1.0", detail)
         self.analysis_notebook.select(0 if complete else 1)
 
     def _run_qwen(self) -> None:
@@ -1164,7 +1161,7 @@ class AIUpdateDialog(tk.Toplevel):
                     timeout_seconds=self.config_data.qwen_timeout_seconds,
                     num_predict=self.config_data.qwen_num_predict,
                 )
-                self.messages.put(("analysis", (report, "分析完成" in report or "【分析完成】" in report)))
+                self.messages.put(("analysis", (report, report.rstrip().endswith("【分析完成】"))))
             except Exception as exc:
                 self.messages.put(("analysis_error", str(exc)))
 
@@ -1205,7 +1202,7 @@ class AIUpdateDialog(tk.Toplevel):
 
         threading.Thread(target=work, name="offline-training", daemon=True).start()
 
-    def _start_x_training(self) -> None:
+    def _start_m_training(self) -> None:
         try:
             epochs = int(self.epochs_var.get())
         except ValueError:
@@ -1215,25 +1212,25 @@ class AIUpdateDialog(tk.Toplevel):
             messagebox.showerror("設定錯誤", "epochs 必須大於 0。", parent=self)
             return
         if not messagebox.askyesno(
-            "訓練 X 模型", "將使用已加入 X 訓練集的人工標註建立候選模型，繼續嗎？", parent=self
+            "訓練 M 模型", "將使用已加入 X 訓練集的人工標註接續訓練 M 候選模型，繼續嗎？", parent=self
         ):
             return
-        self.x_train_button.configure(state="disabled")
-        self.training_text.insert("end", "開始訓練 X 模型……\n")
+        self.m_train_button.configure(state="disabled")
+        self.training_text.insert("end", "開始訓練 M 模型……\n")
 
         def progress(message: str) -> None:
-            self.messages.put(("x_training_progress", message))
+            self.messages.put(("m_training_progress", message))
 
         def work() -> None:
             try:
-                output = TrainingPipeline(self.config_data, self.database).train_x_model(
+                output = TrainingPipeline(self.config_data, self.database).train_m_model(
                     epochs=epochs, progress=progress
                 )
-                self.messages.put(("x_training_done", str(output)))
+                self.messages.put(("m_training_done", str(output)))
             except Exception as exc:
-                self.messages.put(("x_training_error", str(exc)))
+                self.messages.put(("m_training_error", str(exc)))
 
-        threading.Thread(target=work, name="x-model-training", daemon=True).start()
+        threading.Thread(target=work, name="m-model-training", daemon=True).start()
 
     def _open_review_queue(self) -> None:
         TrainingReviewDialog(
@@ -1293,11 +1290,11 @@ class AIUpdateDialog(tk.Toplevel):
                     self.training_text.see("end")
                     if kind in {"training_done", "training_error"}:
                         self.train_button.configure(state="normal")
-                    if kind in {"x_training_done", "x_training_error"}:
-                        self.x_train_button.configure(state="normal")
+                    if kind in {"m_training_done", "m_training_error"}:
+                        self.m_train_button.configure(state="normal")
                     if kind == "training_done":
                         self._refresh_model_versions()
-                    if kind == "x_training_done":
+                    if kind == "m_training_done":
                         self._refresh_model_versions()
         except queue.Empty:
             pass

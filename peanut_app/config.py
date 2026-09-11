@@ -62,7 +62,7 @@ class AppConfig:
     qwen_endpoint: str = "http://127.0.0.1:11434/api/generate"
     qwen_model: str = "qwen3.5:9b"
     qwen_timeout_seconds: int = 300
-    qwen_num_predict: int = 1024
+    qwen_num_predict: int = 4096
 
     def ensure_directories(self) -> None:
         self.data_root.mkdir(parents=True, exist_ok=True)

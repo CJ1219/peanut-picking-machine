@@ -4,6 +4,7 @@ import csv
 import json
 import random
 import shutil
+import traceback
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -33,9 +34,6 @@ class TrainingPipeline:
         from ultralytics import YOLO
 
         callback = progress or (lambda _message: None)
-        if not self.config.x_model_path.exists():
-            raise FileNotFoundError(f"找不到 x 模型：{self.config.x_model_path}")
-
         m_model_path = self.config.m_model_path
         if not m_model_path.exists():
             raise FileNotFoundError(f"找不到 M 模型：{m_model_path}")
@@ -45,6 +43,7 @@ class TrainingPipeline:
                 "CAPTURED",
                 "AUTO_CANDIDATE",
                 "APPROVED",
+                "X_TRAINING",
                 "NEEDS_REVIEW",
                 "NEEDS_MANUAL_LABEL",
             )
@@ -60,12 +59,26 @@ class TrainingPipeline:
         auto_label_root.mkdir(parents=True, exist_ok=True)
 
         try:
+            callback(f"檢查 M 訓練起始權重：{m_model_path}")
+            m_model = self._load_training_model(m_model_path)
             self.database.update_training_run(run_id, "AUTO_LABELING")
-            callback("載入 x 模型，對完整無框線原始幀執行高信心自動標註……")
-            x_model = YOLO(str(self.config.x_model_path))
-            names = x_model.names
+            pending_samples = [
+                sample for sample in samples
+                if not Path(sample["x_labels_path"] or "").is_file()
+            ]
+            callback(
+                f"沿用既有 X 標註：{len(samples) - len(pending_samples)} 張；"
+                f"待標註：{len(pending_samples)} 張。"
+            )
+            names = m_model.names
+            if pending_samples:
+                if not self.config.x_model_path.is_file():
+                    raise FileNotFoundError(f"找不到 x 模型：{self.config.x_model_path}")
+                callback("載入 X 模型，只對尚無標註檔的完整原始幀執行高信心自動標註……")
+                x_model = YOLO(str(self.config.x_model_path))
+                names = x_model.names
 
-            for index, sample in enumerate(samples, start=1):
+            for index, sample in enumerate(pending_samples, start=1):
                 image_path = Path(sample["image_path"])
                 metadata_path = Path(sample["metadata_path"])
                 if not image_path.exists() or not metadata_path.exists():
@@ -146,8 +159,8 @@ class TrainingPipeline:
                         "X 與線上 M 的類別、數量或位置不一致，等待人工確認",
                         x_label_path,
                     )
-                if index % 25 == 0 or index == len(samples):
-                    callback(f"自動標註與分流：{index}/{len(samples)}")
+                if index % 25 == 0 or index == len(pending_samples):
+                    callback(f"自動標註與分流：{index}/{len(pending_samples)}")
 
             accepted_rows = self.database.training_sample_rows(
                 statuses=("AUTO_CANDIDATE", "APPROVED", "X_TRAINING")
@@ -198,11 +211,11 @@ class TrainingPipeline:
             )
             self.database.update_training_run(run_id, "TRAINING", dataset_path=dataset_yaml)
             callback(
-                f"資料集完成：train={len(train_items)}、val={len(validation_items)}；"
+                f"新增標註：train={len(train_items)}、val={len(validation_items)}；"
                 "開始訓練 M 模型……"
             )
 
-            m_model = YOLO(str(m_model_path))
+            callback("使用 AMP 混合精度訓練（啟用速度與顯示記憶體最佳化）。")
             training_result = m_model.train(
                 data=str(dataset_yaml),
                 epochs=epochs,
@@ -210,6 +223,7 @@ class TrainingPipeline:
                 project=str(run_root / "runs"),
                 name="m_candidate",
                 exist_ok=False,
+                amp=True,
             )
             output_path = Path(training_result.save_dir)
             candidate_path = output_path / "weights" / "best.pt"
@@ -246,6 +260,9 @@ class TrainingPipeline:
             )
             return output_path
         except Exception as exc:
+            error_log = run_root / "error_traceback.txt"
+            error_log.write_text(traceback.format_exc(), encoding="utf-8")
+            callback(f"訓練失敗，完整錯誤紀錄：{error_log}")
             self.database.update_training_run(
                 run_id,
                 "FAILED",
@@ -338,8 +355,8 @@ class TrainingPipeline:
                 callback(f"X 標註刷新：{index}/{len(samples)}")
         return refreshed
 
-    def train_x_model(self, epochs: int = 30, progress: ProgressCallback | None = None) -> Path:
-        """以人工加入的 X_TRAINING 標註訓練 X 候選模型，保留目前模型不變。"""
+    def train_m_model(self, epochs: int = 30, progress: ProgressCallback | None = None) -> Path:
+        """以人工確認的 X 標註資料接續訓練 M 候選模型，保留目前模型不變。"""
         from ultralytics import YOLO
 
         callback = progress or (lambda _message: None)
@@ -347,8 +364,10 @@ class TrainingPipeline:
         samples = [sample for sample in samples if sample["x_labels_path"]]
         if len(samples) < 2:
             raise RuntimeError("至少需要 2 筆已加入 X 訓練集的人工標註")
+        callback(f"檢查 M 訓練起始權重：{self.config.m_model_path}")
+        model = self._load_training_model(self.config.m_model_path)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        root = self.config.training_root / f"x_model_training_{timestamp}"
+        root = self.config.training_root / f"m_model_training_{timestamp}"
         train_images, train_labels = root / "images" / "train", root / "labels" / "train"
         val_images, val_labels = root / "images" / "val", root / "labels" / "val"
         for folder in (train_images, train_labels, val_images, val_labels):
@@ -383,16 +402,23 @@ class TrainingPipeline:
         callback(
             f"混合資料集：train={mixed_counts['train']} + val={mixed_counts['val']} + "
             f"test={mixed_counts['test']} = {sum(mixed_counts.values())} 張；"
-            f"開始訓練 X 模型（人工標註 {len(samples)} 筆，epochs={epochs}）"
+            f"開始訓練 M 模型（使用 {len(samples)} 筆人工確認的 X 標註，epochs={epochs}）"
         )
-        model = YOLO(str(self.config.x_model_path))
-        result = model.train(
-            data=str(yaml_path), epochs=epochs, imgsz=self.config.inference_image_size,
-            project=str(root / "runs"), name="x_candidate", exist_ok=True, verbose=False,
-        )
+        callback("使用 AMP 混合精度訓練（啟用速度與顯示記憶體最佳化）。")
+        try:
+            result = model.train(
+                data=str(yaml_path), epochs=epochs, imgsz=self.config.inference_image_size,
+                project=str(root / "runs"), name="m_candidate", exist_ok=True, verbose=False,
+                amp=True,
+            )
+        except Exception:
+            error_log = root / "error_traceback.txt"
+            error_log.write_text(traceback.format_exc(), encoding="utf-8")
+            callback(f"訓練失敗，完整錯誤紀錄：{error_log}")
+            raise
         candidate = Path(result.save_dir) / "weights" / "best.pt"
         if not candidate.is_file():
-            raise RuntimeError("X 模型訓練完成但找不到 best.pt")
+            raise RuntimeError("M 模型訓練完成但找不到 best.pt")
         metrics: dict[str, float] = {}
         results_csv = candidate.parent.parent / "results.csv"
         if results_csv.is_file():
@@ -412,7 +438,7 @@ class TrainingPipeline:
                     if best_row.get(key):
                         metrics[key] = float(best_row[key])
                 metrics["best_epoch"] = float(best_row.get("epoch", 0) or 0)
-        candidate_version = f"x_auto_{timestamp}"
+        candidate_version = f"m_auto_{timestamp}"
         self.database.register_model_version(
             version=candidate_version,
             weight_path=candidate,
@@ -420,8 +446,22 @@ class TrainingPipeline:
             metrics=metrics,
             active=False,
         )
-        callback(f"X 模型候選完成：{candidate}")
+        callback(f"M 模型候選完成：{candidate}")
         return candidate
+
+    @staticmethod
+    def _load_training_model(path: Path):
+        from ultralytics import YOLO
+
+        if not path.is_file():
+            raise FileNotFoundError(f"找不到 M 訓練起始權重：{path}")
+        try:
+            return YOLO(str(path))
+        except Exception as exc:
+            raise RuntimeError(
+                f"無法載入 M 訓練起始權重：{path}（{path.stat().st_size:,} bytes）。"
+                f"請確認權重完整且格式相容。原始錯誤：{exc}"
+            ) from exc
 
     def _prepare_mixed_dataset(self, dataset_root: Path, new_items: list[tuple]) -> tuple[list[tuple], list[tuple]]:
         """複製原始 train/val，再按原始比例隨機分配新增資料。"""
