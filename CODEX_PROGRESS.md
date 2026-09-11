@@ -441,3 +441,57 @@
 
 ### 下一步
 - 補上上述照片與配電規格後，替換待補段落並完成正式繳交版排版檢查。
+
+## 2026-09-11 — 標示撥片重疊區域
+
+### 已完成
+- 在 `中興AI競賽/detect_open_gopro.py` 顯示影像新增橘色半透明重疊帶、上下邊線及 Overlap 道別標籤，GUI 與獨立模式共用。
+- 依 SERVO 區域交集繪製，保留使用者既有 overlapping = 60 修改；不更動辨識或控制判定。
+
+### 驗證
+- `python -m py_compile 中興AI競賽/detect_open_gopro.py` 通過。
+- 使用 NumPy 合成影像執行新增繪圖片段：三個重疊區有著色、區外像素保持不變，通過。
+- 已檢查 git status，程式與進度檔均列為修改。
+
+### 目前限制
+- 尚未連接 GoPro 與 Arduino 進行實機確認。
+- 既有 LANE_RANGES 仍是 30 像素重疊，與使用者調整後的 SERVO 60 像素設定不同；本次標示依 SERVO 設定。
+
+### 下一步
+- 實機確認重疊帶位置；確認是否統一 LANE_RANGES 與 SERVO 區域設定。
+
+## 2026-09-11 — 重疊區改為撥片界線上下各 30 像素
+
+### 已完成
+- `中興AI競賽/detect_open_gopro.py` 新增共用 SERVO_BOUNDARIES 與 SERVO_OVERLAP_HALF_WIDTH = 30，以分界 Y=330、568、781 為中心建立重疊區。
+- 重疊區為 300–360、538–598、751–811；四道範圍统一由 LANE_RANGES 提供給 SERVO 控制與 GUI 判定。
+- 黑色分界線保留於重疊帶中心；橘色標示依共用區域交集自動繪製。修正先前兩份設定不一致。
+
+### 驗證
+- `python -m py_compile 中興AI競賽/detect_open_gopro.py peanut_app/gopro_detection.py` 通過。
+- 無硬體匯入模組，驗證四道範圍、三處交集皆為界線 ±30，且上下端點及中心皆命中相鄰兩道，通過。
+- `git diff --check` 通過；`git status --short` 可見程式及進度檔修改。
+
+### 目前限制
+- 尚未使用 GoPro 與 Arduino 實機驗證。
+- 範圍採包含端點判定，60 像素座標跨度涵蓋 61 列像素。
+
+### 下一步
+- 實機確認分界線、重疊帶與撥片位置對齊。
+
+## 2026-09-11 — 重疊區調整為界線上下各 40 像素
+
+### 已完成
+- `中興AI競賽/detect_open_gopro.py` 的 SERVO_OVERLAP_HALF_WIDTH 由 30 改為 40。
+- 共用區域判定及畫面重疊標示同步採用 ±40：290–370、528–608、741–821。
+
+### 驗證
+- `python -m py_compile 中興AI競賽/detect_open_gopro.py peanut_app/gopro_detection.py` 通過。
+- 無硬體匯入檢查四道範圍與三處交集，確認中心及上下端點皆命中相鄰兩道，通過。
+- `git diff --check` 通過；`git status --short` 確認程式與進度檔列為修改。
+
+### 目前限制
+- 尚未進行 GoPro／Arduino 實機測試；包含端點的 80 像素跨度實際涵蓋 81 列像素。
+
+### 下一步
+- 實機確認重疊帶與撥片位置對齊。

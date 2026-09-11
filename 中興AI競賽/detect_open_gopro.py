@@ -14,7 +14,17 @@ DEFAULT_GOPRO_SERIAL = "468"
 # GoPro Webcam 最高支援 1080p；Linear 可減少畫面邊緣變形，方便 AI 辨識。
 GOPRO_WEBCAM_RESOLUTION = 12
 GOPRO_WEBCAM_FOV = 4
-LANE_RANGES = ((75, 330), (300, 568), (538, 781), (751, 923))
+SERVO_Y_OFFSET = 30
+SERVO_OVERLAP_HALF_WIDTH = 40
+SERVO_BOUNDARIES = tuple(y - SERVO_Y_OFFSET for y in (360, 598, 811))
+LANE_RANGES = (
+    (105 - SERVO_Y_OFFSET, SERVO_BOUNDARIES[0] + SERVO_OVERLAP_HALF_WIDTH),
+    (SERVO_BOUNDARIES[0] - SERVO_OVERLAP_HALF_WIDTH,
+     SERVO_BOUNDARIES[1] + SERVO_OVERLAP_HALF_WIDTH),
+    (SERVO_BOUNDARIES[1] - SERVO_OVERLAP_HALF_WIDTH,
+     SERVO_BOUNDARIES[2] + SERVO_OVERLAP_HALF_WIDTH),
+    (SERVO_BOUNDARIES[2] - SERVO_OVERLAP_HALF_WIDTH, 953 - SERVO_Y_OFFSET),
+)
 DEFAULT_TRACKER = ROOT / "中興AI競賽/peanut_bytetrack.yaml"
 
 
@@ -401,22 +411,17 @@ def run_detection(*, model_path=DEFAULT_MODEL, tracker_path=DEFAULT_TRACKER,
         # 5-2. 四個撥桿區域
         # =========================================================
 
-        Adjust_deviation = 30
-        overlapping = 30
-        SERVO1_Y_MIN = 105-Adjust_deviation
-        SERVO1_Y_MAX = 360-Adjust_deviation
+        # Shared ranges keep the GUI, control logic and overlay consistent.
+        SERVO1_Y_MIN, SERVO1_Y_MAX = LANE_RANGES[0]
         SERVO1_PIN = 2
 
-        SERVO2_Y_MIN = 360-Adjust_deviation-overlapping
-        SERVO2_Y_MAX = 598-Adjust_deviation
+        SERVO2_Y_MIN, SERVO2_Y_MAX = LANE_RANGES[1]
         SERVO2_PIN = 3
 
-        SERVO3_Y_MIN = 598-Adjust_deviation-overlapping
-        SERVO3_Y_MAX = 811-Adjust_deviation
+        SERVO3_Y_MIN, SERVO3_Y_MAX = LANE_RANGES[2]
         SERVO3_PIN = 4
 
-        SERVO4_Y_MIN = 811-Adjust_deviation-overlapping
-        SERVO4_Y_MAX = 953-Adjust_deviation
+        SERVO4_Y_MIN, SERVO4_Y_MAX = LANE_RANGES[3]
         SERVO4_PIN = 5
 
 
@@ -707,6 +712,30 @@ def run_detection(*, model_path=DEFAULT_MODEL, tracker_path=DEFAULT_TRACKER,
             # 9-2. 四個撥桿區域
             # =====================================================
 
+            # Highlight adjacent servo overlap on the display image only.
+            servo_regions = (
+                (SERVO1_Y_MIN, SERVO1_Y_MAX),
+                (SERVO2_Y_MIN, SERVO2_Y_MAX),
+                (SERVO3_Y_MIN, SERVO3_Y_MAX),
+                (SERVO4_Y_MIN, SERVO4_Y_MAX),
+            )
+            for index, (first, second) in enumerate(
+                zip(servo_regions, servo_regions[1:]), start=1
+            ):
+                top = max(0, first[0], second[0])
+                bottom = min(display_frame.shape[0] - 1, first[1], second[1])
+                if top > bottom:
+                    continue
+                band = display_frame[top:bottom + 1, :]
+                tint = np.full_like(band, (0, 165, 255))
+                cv2.addWeighted(band, 0.75, tint, 0.25, 0, dst=band)
+                for edge_y in (top, bottom):
+                    cv2.line(display_frame, (0, edge_y),
+                             (display_frame.shape[1] - 1, edge_y), (0, 165, 255), 2)
+                cv2.putText(display_frame, f"Overlap {index}-{index + 1}",
+                            (10, max(18, (top + bottom) // 2 + 6)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 165, 255), 2)
+
             # Servo1
 
             cv2.line(
@@ -728,9 +757,9 @@ def run_detection(*, model_path=DEFAULT_MODEL, tracker_path=DEFAULT_TRACKER,
 
                 display_frame,
 
-                (0, SERVO1_Y_MAX),
+                (0, SERVO_BOUNDARIES[0]),
 
-                (width, SERVO1_Y_MAX),
+                (width, SERVO_BOUNDARIES[0]),
 
                 (0, 0, 0),
 
@@ -745,9 +774,9 @@ def run_detection(*, model_path=DEFAULT_MODEL, tracker_path=DEFAULT_TRACKER,
 
                 display_frame,
 
-                (0, SERVO2_Y_MAX),
+                (0, SERVO_BOUNDARIES[1]),
 
-                (width, SERVO2_Y_MAX),
+                (width, SERVO_BOUNDARIES[1]),
 
                 (0, 0, 0),
 
@@ -762,9 +791,9 @@ def run_detection(*, model_path=DEFAULT_MODEL, tracker_path=DEFAULT_TRACKER,
 
                 display_frame,
 
-                (0, SERVO3_Y_MAX),
+                (0, SERVO_BOUNDARIES[2]),
 
-                (width, SERVO3_Y_MAX),
+                (width, SERVO_BOUNDARIES[2]),
 
                 (0, 0, 0),
 
